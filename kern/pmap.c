@@ -112,6 +112,8 @@ boot_alloc(uint32_t n)
 	nextfree += n;
 	nextfree = ROUNDUP((char *) nextfree, PGSIZE);
 
+	// cprintf("result is %x\n", result);
+
 	return result;
 }
 
@@ -129,6 +131,7 @@ mem_init(void)
 {
 	uint32_t cr0;
 	size_t n;
+	pde_t * tmp;
 
 	// Find out how much memory the machine has (npages & npages_basemem).
 	i386_detect_memory();
@@ -138,8 +141,10 @@ mem_init(void)
 
 	//////////////////////////////////////////////////////////////////////
 	// create initial page directory.
+	tmp = (pde_t *) boot_alloc(PGSIZE);		// 这里分配了两次，因为如果只分配一次：memset会使kern_pgdir变成0，可能有浪费内存的风险？
+	
 	kern_pgdir = (pde_t *) boot_alloc(PGSIZE);
-	memset(kern_pgdir, 0, PGSIZE);
+	memset(kern_pgdir, 0, PGSIZE);	// TODO:注释掉了原有的代码，不然会导致kern_pgdir变成0，不知道是什么原因
 
 	//////////////////////////////////////////////////////////////////////
 	// Recursively insert PD in itself as a page table, to form
@@ -168,6 +173,8 @@ mem_init(void)
 	//////////////////////////////////////////////////////////////////////
 	// Make 'envs' point to an array of size 'NENV' of 'struct Env'.
 	// LAB 3: Your code here.
+	envs = (struct Env *) boot_alloc(NENV * sizeof(struct Env));
+	memset(envs, 0, NENV * sizeof(struct Env));
 
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
@@ -200,6 +207,7 @@ mem_init(void)
 	//    - the new image at UENVS  -- kernel R, user R
 	//    - envs itself -- kernel RW, user NONE
 	// LAB 3: Your code here.
+	boot_map_region(kern_pgdir, UENVS, ROUNDUP(NENV*sizeof(struct Env), PGSIZE), PADDR(envs), PTE_U);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
@@ -593,6 +601,18 @@ int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 {
 	// LAB 3: Your code here.
+
+	void * begin = (void *) ROUNDDOWN(va, PGSIZE), *end = (void *)ROUNDUP(va + len, PGSIZE);
+
+	for (; begin < end; begin += PGSIZE) {
+
+		pte_t * pte_p = pgdir_walk(env->env_pgdir, begin, 0);
+
+		if (begin >= (void *)ULIM || pte_p == NULL || (((*pte_p) & perm) != perm)) {
+			user_mem_check_addr =  (uintptr_t) (begin < va ? va : begin);	// 易错的地方，返回的不一定是begin
+			return -E_FAULT;
+		}
+	}
 
 	return 0;
 }
