@@ -24,6 +24,7 @@ struct Command {
 
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
+	{ "backtrace", "TODO", mon_backtrace },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
 };
 
@@ -55,11 +56,34 @@ mon_kerninfo(int argc, char **argv, struct Trapframe *tf)
 	return 0;
 }
 
+// format:
+// Stack backtrace:
+//   ebp f0109e58  eip f0100a62  args 00000001 f0109e80 f0109e98 f0100ed2 00000031
+//   ebp f0109ed8  eip f01000d6  args 00000000 00000000 f0100058 f0109f28 00000061
 int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 {
+    struct Eipdebuginfo info;
+
+    int * ebp = (int *)read_ebp();
+
+    cprintf("Stack backtrace:\n");
+
 	// Your code here.
+    for (;ebp;)
+    {
+	 	cprintf("  ebp %08x  eip %08x  args %08x %08x %08x %08x %08x\r\n", ebp, ebp[1], ebp[2], ebp[3], ebp[4], ebp[5], ebp[6]);
+		
+        debuginfo_eip(ebp[1], &info);
+		cprintf("\t%s:%d: %.*s+%u\r\n", info.eip_file, info.eip_line, info.eip_fn_namelen,
+		 info.eip_fn_name, ebp[1] - info.eip_fn_addr);
+ 		// cprintf("\t%s:%d: %.*s+%u\r\n", info.eip_file, info.eip_line, info.eip_fn_namelen, info.eip_fn_name, info.eip_fn_addr);
+	
+        ebp = (int *)*ebp;
+    }
+
 	return 0;
+
 }
 
 
