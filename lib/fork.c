@@ -23,8 +23,10 @@ pgfault(struct UTrapframe *utf)
     if(!(err & FEC_WR))
         panic("pgfault error Not FEC_WR");
 
-    if(!(uvpt[(uintptr_t)PGNUM(addr)] & PTE_COW))
+    if(!(uvpt[(uintptr_t)PGNUM(addr)] & PTE_COW)) {
         panic("pgfault error Not PTE_COW");
+	}
+
 
     int perm = PTE_P|PTE_U|PTE_W;
     envid_t envid = sys_getenvid();
@@ -54,20 +56,36 @@ pgfault(struct UTrapframe *utf)
 static int
 duppage(envid_t envid, unsigned pn)
 {
-	 int r;
+	// cprintf("duppgage %d\n", pn);
+	int r;
     envid_t curenvid = sys_getenvid();
     uintptr_t va = pn * PGSIZE;
     int perm = PTE_P|PTE_U;
 
     if((uvpt[pn] & PTE_W) || (uvpt[pn] & PTE_COW)){
-        if((r = sys_page_map(curenvid, (void*)va, envid, (void*)va, perm|PTE_COW)) < 0)
+        if ((r = sys_page_map(curenvid, (void*)va, envid, (void*)va, perm | PTE_COW)) < 0) {
             return r;
-        if((r = sys_page_map(curenvid, (void*)va, curenvid, (void*)va, perm|PTE_COW)) < 0)
+		} else {
+			// cprintf("copy1\n");
+		}
+		r = sys_page_map(curenvid, (void*)va, curenvid, (void*)va, perm | PTE_COW);
+		// cprintf("?\n");
+        if (r < 0) {
             return r;
+		} else {
+			// cprintf("copy2\n");
+		}
+
     }
-    else
-        if((r = sys_page_map(curenvid, (void*)va, envid, (void*)va, perm)) < 0)
+    else {
+        if((r = sys_page_map(curenvid, (void*)va, envid, (void*)va, perm)) < 0) {
             return r;
+		} else {
+			// cprintf("copy3\n");
+		}
+	}
+
+
 
     return 0;
 }
@@ -97,20 +115,30 @@ fork(void)
 
     envid_t envid = sys_exofork();
 
-    if(envid < 0)
+    if (envid < 0) {
         return envid;
+	}
 
-    if(envid == 0){
+
+    if (envid == 0) {	// fix
         thisenv = &envs[ENVX(sys_getenvid())];
         return 0;
     }
 
-    for(uintptr_t i = 0; i < USTACKTOP; i += PGSIZE){
-        if(!(uvpd[i >> PDXSHIFT] & PTE_P) || !(uvpt[PGNUM(i)] & PTE_P))
+	cprintf("%d\n", PGNUM(USTACKTOP));
+
+    for (uintptr_t i = 0; i < USTACKTOP; i += PGSIZE){
+        if (!(uvpd[i >> PDXSHIFT] & PTE_P) || !(uvpt[PGNUM(i)] & PTE_P)) {	// invalid
             continue;
-        if((r = duppage(envid, PGNUM(i))) < 0)
+		}
+
+        if ((r = duppage(envid, PGNUM(i))) < 0) {
             return r;
+		}
+
     }
+
+	cprintf("hhh\nn");
 
     if((r = sys_page_alloc(envid, (void*)(UXSTACKTOP - PGSIZE), PTE_P|PTE_U|PTE_W)) < 0)
         return r;

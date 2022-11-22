@@ -95,6 +95,49 @@ trap_init(void)
 	void SimderrHandler();
 	void SystemCallHandler();
 
+	
+    void IRQsHandler0();
+    void IRQsHandler1();
+    void IRQsHandler2();
+    void IRQsHandler3();
+    void IRQsHandler4();
+    void IRQsHandler5();
+    void IRQsHandler6();
+    void IRQsHandler7();
+    void IRQsHandler8();
+    void IRQsHandler9();
+    void IRQsHandler10();
+    void IRQsHandler11();
+    void IRQsHandler12();
+    void IRQsHandler13();
+    void IRQsHandler14();
+    void IRQsHandler15();
+    // void IRQsHandler16();
+    // void IRQsHandler17();
+    // void IRQsHandler18();
+    void IRQsHandler19();
+
+	SETGATE(idt[IRQ_OFFSET+IRQ_TIMER], 0, GD_KT, IRQsHandler0, 0);
+    SETGATE(idt[IRQ_OFFSET+IRQ_KBD], 0, GD_KT, IRQsHandler1, 0);
+    SETGATE(idt[IRQ_OFFSET+2], 0, GD_KT, IRQsHandler2, 0);
+    SETGATE(idt[IRQ_OFFSET+3], 0, GD_KT, IRQsHandler3, 0);
+    SETGATE(idt[IRQ_OFFSET+IRQ_SERIAL], 0, GD_KT, IRQsHandler4, 0);
+    SETGATE(idt[IRQ_OFFSET+5], 0, GD_KT, IRQsHandler5, 0);
+    SETGATE(idt[IRQ_OFFSET+6], 0, GD_KT, IRQsHandler6, 0);
+    SETGATE(idt[IRQ_OFFSET+IRQ_SPURIOUS], 0, GD_KT, IRQsHandler7, 0);
+    SETGATE(idt[IRQ_OFFSET+8], 0, GD_KT, IRQsHandler8, 0);
+    SETGATE(idt[IRQ_OFFSET+9], 0, GD_KT, IRQsHandler9, 0);
+    SETGATE(idt[IRQ_OFFSET+10], 0, GD_KT, IRQsHandler10, 0);
+    SETGATE(idt[IRQ_OFFSET+11], 0, GD_KT, IRQsHandler11, 0);
+    SETGATE(idt[IRQ_OFFSET+12], 0, GD_KT, IRQsHandler12, 0);
+    SETGATE(idt[IRQ_OFFSET+13], 0, GD_KT, IRQsHandler13, 0);
+    SETGATE(idt[IRQ_OFFSET+IRQ_IDE], 0, GD_KT, IRQsHandler14, 0);
+    SETGATE(idt[IRQ_OFFSET+15], 0, GD_KT, IRQsHandler15, 0);
+    // SETGATE(idt[IRQ_OFFSET+16], 0, GD_KT, IRQsHandler16, 0);
+    // SETGATE(idt[IRQ_OFFSET+17], 0, GD_KT, IRQsHandler17, 0);
+    // SETGATE(idt[IRQ_OFFSET+18], 0, GD_KT, IRQsHandler18, 0);
+    SETGATE(idt[IRQ_OFFSET+IRQ_ERROR], 0, GD_KT, IRQsHandler19, 0);
+
 	SETGATE(idt[T_DIVIDE], 0, GD_KT, DivideZeroHandler, 0);
     SETGATE(idt[T_DEBUG], 0, GD_KT, DebugHandler, 0);
     SETGATE(idt[T_NMI], 0, GD_KT, NMIHandler, 0);
@@ -163,7 +206,7 @@ trap_init_percpu(void)
 
     // The LTR instruction loads a segment selector (source operand) into the task register
     // that points to a TSS descriptor in the GDT
-    ltr(GD_TSS0 + (thiscpu->cpu_id << 3));
+    ltr(GD_TSS0);
 
     // Load the IDT
     lidt(&idt_pd);
@@ -223,6 +266,9 @@ trap_dispatch(struct Trapframe *tf)
 
 	switch (tf->tf_trapno)
 	{
+	case IRQ_OFFSET + IRQ_TIMER :
+		lapic_eoi();
+        sched_yield();
 	case T_PGFLT :
 		page_fault_handler(tf);
 		return ;
@@ -320,9 +366,10 @@ page_fault_handler(struct Trapframe *tf)
 
     // Read processor's CR2 register to find the faulting address
     fault_va = rcr2();
-
-    if ((tf->tf_cs & 0x3) == 0)
-        panic("page_fault_handler panic, page fault in kernel!\n");
+	// print_trapframe(tf);
+    if ((tf->tf_cs & 0x3) == 0) {
+		panic("page_fault_handler panic, page fault in kernel!\n");
+	}
 
     if(curenv->env_pgfault_upcall == NULL){
         // Destroy the environment that caused the fault.
@@ -334,25 +381,29 @@ page_fault_handler(struct Trapframe *tf)
 
     struct UTrapframe *utf;
     uintptr_t UtfAddress;
-    size_t size = sizeof(struct UTrapframe) + sizeof(uint32_t);
+    size_t size = sizeof(struct UTrapframe);		// 栈帧
 
-    if(tf->tf_esp >= UXSTACKTOP - PGSIZE && tf->tf_esp < UXSTACKTOP)
-        UtfAddress = tf->tf_esp - size;
-    else
-        UtfAddress = UXSTACKTOP - size;
+    if (tf->tf_esp >= UXSTACKTOP - PGSIZE && tf->tf_esp < UXSTACKTOP) {	// 判断是否已经触发中断，如果是在原有的栈帧下面加
+		size += 4;
+		UtfAddress = tf->tf_esp - size;	
+	} else {
+		UtfAddress = UXSTACKTOP - size;
+	}
 
     user_mem_assert(curenv, (void*)UtfAddress, size, PTE_P|PTE_U|PTE_W);
     utf = (struct UTrapframe*)UtfAddress;
 
-    utf->utf_fault_va = fault_va;
-    utf->utf_eflags = tf->tf_eflags;
-    utf->utf_eip = tf->tf_eip;
+	// 存储之前栈帧的信息
+    utf->utf_fault_va = fault_va;	// 中断？？
     utf->utf_err = tf->tf_err;
     utf->utf_esp = tf->tf_esp;
     utf->utf_regs = tf->tf_regs;
+    utf->utf_eip = tf->tf_eip;
+	utf->utf_eflags = tf->tf_eflags;
 
+	// eip控制跳转，跳转到专门的缺页中断函数
     tf->tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
-    tf->tf_esp = (uintptr_t)utf;
+    tf->tf_esp = (uintptr_t)utf;	// esp是处理完缺页中断后返回的地方，也就是返回之前存储的栈帧
     env_run(curenv);
 }
 
