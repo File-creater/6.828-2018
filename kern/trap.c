@@ -151,22 +151,22 @@ trap_init_percpu(void)
 	// LAB 4: Your code here:
 
 	// Setup a TSS so that we get the right stack
-	// when we trap to the kernel.
-	ts.ts_esp0 = KSTACKTOP;
-	ts.ts_ss0 = GD_KD;
-	ts.ts_iomb = sizeof(struct Taskstate);
+    // when we trap to the kernel.
+    thiscpu->cpu_ts.ts_esp0 = KSTACKTOP - thiscpu->cpu_id * (KSTKSIZE + KSTKGAP);
+    thiscpu->cpu_ts.ts_ss0 = GD_KD;
+    thiscpu->cpu_ts.ts_iomb = sizeof(struct Taskstate); // we don't need to know what is it.
 
-	// Initialize the TSS slot of the gdt.
-	gdt[GD_TSS0 >> 3] = SEG16(STS_T32A, (uint32_t) (&ts),
-					sizeof(struct Taskstate) - 1, 0);
-	gdt[GD_TSS0 >> 3].sd_s = 0;
+    // Initialize the TSS slot of the gdt.
+    gdt[(GD_TSS0 >> 3) + thiscpu->cpu_id] = SEG16(STS_T32A, (uint32_t) (&(thiscpu->cpu_ts)),
+                    sizeof(struct Taskstate) - 1, 0);
+    gdt[(GD_TSS0 >> 3) + thiscpu->cpu_id].sd_s = 0;
 
-	// Load the TSS selector (like other segment selectors, the
-	// bottom three bits are special; we leave them 0)
-	ltr(GD_TSS0);
+    // The LTR instruction loads a segment selector (source operand) into the task register
+    // that points to a TSS descriptor in the GDT
+    ltr(GD_TSS0 + (thiscpu->cpu_id << 3));
 
-	// Load the IDT
-	lidt(&idt_pd);
+    // Load the IDT
+    lidt(&idt_pd);
 }
 
 void
@@ -278,6 +278,7 @@ trap(struct Trapframe *tf)
 		// Acquire the big kernel lock before doing any
 		// serious kernel work.
 		// LAB 4: Your code here.
+		lock_kernel();
 		assert(curenv);
 
 		// Garbage collect if current enviroment is a zombie
@@ -317,56 +318,41 @@ page_fault_handler(struct Trapframe *tf)
 {
 	uint32_t fault_va;
 
-	// Read processor's CR2 register to find the faulting address
-	fault_va = rcr2();
+    // Read processor's CR2 register to find the faulting address
+    fault_va = rcr2();
 
-	// Handle kernel-mode page faults.
+    if ((tf->tf_cs & 0x3) == 0)
+        panic("page_fault_handler panic, page fault in kernel!\n");
 
-	// LAB 3: Your code here.
+    if(curenv->env_pgfault_upcall == NULL){
+        // Destroy the environment that caused the fault.
+        cprintf("[%08x] user fault va %08x ip %08x\n",
+            curenv->env_id, fault_va, tf->tf_eip);
+        print_trapframe(tf);
+        env_destroy(curenv);
+    }
 
-	if ((tf->tf_cs & 3) != 3) {
-		// Trapped from kernel mode.
-		panic("kernel page fault\n");
-	}
+    struct UTrapframe *utf;
+    uintptr_t UtfAddress;
+    size_t size = sizeof(struct UTrapframe) + sizeof(uint32_t);
 
-	// We've already handled kernel-mode exceptions, so if we get here,
-	// the page fault happened in user mode.
+    if(tf->tf_esp >= UXSTACKTOP - PGSIZE && tf->tf_esp < UXSTACKTOP)
+        UtfAddress = tf->tf_esp - size;
+    else
+        UtfAddress = UXSTACKTOP - size;
 
-	// Call the environment's page fault upcall, if one exists.  Set up a
-	// page fault stack frame on the user exception stack (below
-	// UXSTACKTOP), then branch to curenv->env_pgfault_upcall.
-	//
-	// The page fault upcall might cause another page fault, in which case
-	// we branch to the page fault upcall recursively, pushing another
-	// page fault stack frame on top of the user exception stack.
-	//
-	// It is convenient for our code which returns from a page fault
-	// (lib/pfentry.S) to have one word of scratch space at the top of the
-	// trap-time stack; it allows us to more easily restore the eip/esp. In
-	// the non-recursive case, we don't have to worry about this because
-	// the top of the regular user stack is free.  In the recursive case,
-	// this means we have to leave an extra word between the current top of
-	// the exception stack and the new stack frame because the exception
-	// stack _is_ the trap-time stack.
-	//
-	// If there's no page fault upcall, the environment didn't allocate a
-	// page for its exception stack or can't write to it, or the exception
-	// stack overflows, then destroy the environment that caused the fault.
-	// Note that the grade script assumes you will first check for the page
-	// fault upcall and print the "user fault va" message below if there is
-	// none.  The remaining three checks can be combined into a single test.
-	//
-	// Hints:
-	//   user_mem_assert() and env_run() are useful here.
-	//   To change what the user environment runs, modify 'curenv->env_tf'
-	//   (the 'tf' variable points at 'curenv->env_tf').
+    user_mem_assert(curenv, (void*)UtfAddress, size, PTE_P|PTE_U|PTE_W);
+    utf = (struct UTrapframe*)UtfAddress;
 
-	// LAB 4: Your code here.
+    utf->utf_fault_va = fault_va;
+    utf->utf_eflags = tf->tf_eflags;
+    utf->utf_eip = tf->tf_eip;
+    utf->utf_err = tf->tf_err;
+    utf->utf_esp = tf->tf_esp;
+    utf->utf_regs = tf->tf_regs;
 
-	// Destroy the environment that caused the fault.
-	cprintf("[%08x] user fault va %08x ip %08x\n",
-		curenv->env_id, fault_va, tf->tf_eip);
-	print_trapframe(tf);
-	env_destroy(curenv);
+    tf->tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+    tf->tf_esp = (uintptr_t)utf;
+    env_run(curenv);
 }
 

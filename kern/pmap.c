@@ -289,6 +289,9 @@ mem_init_mp(void)
 	//
 	// LAB 4: Your code here:
 
+	for(int i = 0; i < NCPU; ++i)
+        boot_map_region(kern_pgdir, KSTACKTOP - i * (KSTKSIZE + KSTKGAP) - KSTKSIZE, KSTKSIZE,
+        PADDR(percpu_kstacks[i]), PTE_W | PTE_P);
 }
 
 // --------------------------------------------------------------
@@ -332,6 +335,10 @@ page_init(void)
 	for (i = 1; i < npages; i++) {
 
 		if (PGNUM(IOPHYSMEM) <= i && i < PGNUM(PADDR(boot_alloc(0)))) {
+			continue;
+		}
+
+		if (i == MPENTRY_PADDR / PGSIZE) {
 			continue;
 		}
 
@@ -643,7 +650,20 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+
+	size = ROUNDUP(pa + size, PGSIZE);
+    pa = ROUNDDOWN(pa, PGSIZE);
+    size -= pa;
+    if(size + base >= MMIOLIM)
+        panic("reservation would overflow MMIOLIM!\n");
+
+    boot_map_region(kern_pgdir, base, size, pa, PTE_PCD|PTE_PWT|PTE_W);
+
+    base += size;
+
+    return (void *)(base - size);
+
+	// panic("mmio_map_region not implemented");
 }
 
 static uintptr_t user_mem_check_addr;
